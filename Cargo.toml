@@ -8,3 +8,7 @@ edition = "2018"
 
 [dependencies]
 lazy_static = ""
+bitflags = ""
+
+sdl2 = ""
+rand = ""
