@@ -624,8 +624,11 @@ impl CPU {
             callback(self);
             let code = self.mem_read(self.program_counter);
             self.program_counter += 1;
+            
             let program_counter_state = self.program_counter;
-            let opcode = opcodes.get(&code).unwrap();
+            let opcode = opcodes
+                .get(&code)
+                .expect(&format!("OpCode {:x} is Not Recognized ...", code));
 
             match code {
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
@@ -634,6 +637,7 @@ impl CPU {
                 0xAA => self.tax(),
                 0xe8 => self.inx(),
                 0x00 => return,
+
                 // CLD
                 0xd8 => self.status.remove(CpuFlags::DECIMAL_MODE),
                 // CLI
@@ -1054,6 +1058,8 @@ impl CPU {
                     self.mem_write(mem_address, data)
                 }
             }
+            self.bus.tick(opcode.cycles);
+
             if program_counter_state == self.program_counter {
                 self.program_counter += (opcode.len - 1) as u16;
             }

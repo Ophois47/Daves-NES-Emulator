@@ -6,8 +6,10 @@ use std::collections::HashMap;
 
 pub fn trace(cpu: &mut CPU) -> String {
     let ref opscodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
+
     let code = cpu.mem_read(cpu.program_counter);
     let ops = opscodes.get(&code).unwrap();
+
     let begin = cpu.program_counter;
     let mut hex_dump = vec![];
     hex_dump.push(code);
@@ -15,7 +17,7 @@ pub fn trace(cpu: &mut CPU) -> String {
     let (mem_addr, stored_value) = match ops.mode {
         AddressingMode::Immediate | AddressingMode::NoneAddressing => (0, 0),
         _ => {
-            let addr = cpu.get_absolute_address(&ops.mode, begin + 1);
+            let (addr, _) = cpu.get_absolute_address(&ops.mode, begin + 1);
             (addr, cpu.mem_read(addr))
         }
     };
@@ -56,13 +58,14 @@ pub fn trace(cpu: &mut CPU) -> String {
                     stored_value
                 ),
                 AddressingMode::NoneAddressing => {
+                    // assuming local jumps: BNE, BVS, etc....
                     let address: usize =
                         (begin as usize + 2).wrapping_add((address as i8) as usize);
                     format!("${:04x}", address)
                 }
 
                 _ => panic!(
-                    "unexpected addressing mode {:?} has ops-len 2. code {:02x}",
+                    "Unexpected Addressing Mode {:?} has ops-len 2. Code {:02x}",
                     ops.mode, ops.code
                 ),
             }
@@ -78,7 +81,7 @@ pub fn trace(cpu: &mut CPU) -> String {
             match ops.mode {
                 AddressingMode::NoneAddressing => {
                     if ops.code == 0x6c {
-                        // JMP Indirect
+                        //jmp indirect
                         let jmp_addr = if address & 0x00FF == 0x00FF {
                             let lo = cpu.mem_read(address);
                             let hi = cpu.mem_read(address & 0xFF00);
@@ -103,7 +106,7 @@ pub fn trace(cpu: &mut CPU) -> String {
                     address, mem_addr, stored_value
                 ),
                 _ => panic!(
-                    "unexpected addressing mode {:?} has ops-len 3. code {:02x}",
+                    "Unexpected Addressing Mode {:?} has ops-len 3. Code {:02x}",
                     ops.mode, ops.code
                 ),
             }
@@ -147,7 +150,6 @@ mod test {
         cpu.register_a = 1;
         cpu.register_x = 2;
         cpu.register_y = 3;
-
         let mut result: Vec<String> = vec![];
         cpu.run_with_callback(|cpu| {
             result.push(trace(cpu));
@@ -173,17 +175,16 @@ mod test {
         bus.mem_write(100, 0x11);
         bus.mem_write(101, 0x33);
 
-        // Data
+        //data
         bus.mem_write(0x33, 00);
         bus.mem_write(0x34, 04);
 
-        // Target Cell
+        //target cell
         bus.mem_write(0x400, 0xAA);
 
         let mut cpu = CPU::new(bus);
         cpu.program_counter = 0x64;
         cpu.register_y = 0;
-
         let mut result: Vec<String> = vec![];
         cpu.run_with_callback(|cpu| {
             result.push(trace(cpu));
