@@ -51,14 +51,12 @@ pub trait Mem {
     fn mem_read_u16(&mut self, pos: u16) -> u16 {
         let lo = self.mem_read(pos) as u16;
         let hi = self.mem_read(pos + 1) as u16;
-
         (hi << 8) | (lo as u16)
     }
 
     fn mem_write_u16(&mut self, pos: u16, data: u16) {
         let hi = (data >> 8) as u8;
         let lo = (data & 0xff) as u8;
-
         self.mem_write(pos, lo);
         self.mem_write(pos + 1, hi);
     }
@@ -72,6 +70,7 @@ impl Mem for CPU<'_> {
     fn mem_write(&mut self, addr: u16, data: u8) {
         self.bus.mem_write(addr, data)
     }
+
     fn mem_read_u16(&mut self, addr: u16) -> u16 {
         self.bus.mem_read_u16(addr)
     }
@@ -89,6 +88,7 @@ mod interrupt {
     #[derive(PartialEq, Eq)]
     pub enum InterruptType {
         NMI,
+        // BRK,
     }
 
     #[derive(PartialEq, Eq)]
@@ -98,12 +98,21 @@ mod interrupt {
         pub(super) b_flag_mask: u8,
         pub(super) cpu_cycles: u8,
     }
+
     pub(super) const NMI: Interrupt = Interrupt {
         itype: InterruptType::NMI,
         vector_addr: 0xfffA,
         b_flag_mask: 0b00100000,
         cpu_cycles: 2,
     };
+
+    /*pub(super) const BRK: Interrupt = Interrupt {
+        itype: InterruptType::BRK,
+        vector_addr: 0xfffe,
+        b_flag_mask: 0b00110000,
+        cpu_cycles: 1,
+    };*/
+
 }
 
 impl<'a> CPU<'a> {
@@ -119,34 +128,37 @@ impl<'a> CPU<'a> {
         }
     }
 
+    // Returns (address, page_cross flag)
     pub fn get_absolute_address(&mut self, mode: &AddressingMode, addr: u16) -> (u16, bool) {
         match mode {
             AddressingMode::ZeroPage => (self.mem_read(addr) as u16, false),
+
             AddressingMode::Absolute => (self.mem_read_u16(addr), false),
+
             AddressingMode::ZeroPage_X => {
                 let pos = self.mem_read(addr);
                 let addr = pos.wrapping_add(self.register_x) as u16;
 
                 (addr, false)
-            },
+            }
             AddressingMode::ZeroPage_Y => {
                 let pos = self.mem_read(addr);
                 let addr = pos.wrapping_add(self.register_y) as u16;
 
                 (addr, false)
-            },
+            }
             AddressingMode::Absolute_X => {
                 let base = self.mem_read_u16(addr);
                 let addr = base.wrapping_add(self.register_x as u16);
 
                 (addr, page_cross(base, addr))
-            },
+            }
             AddressingMode::Absolute_Y => {
                 let base = self.mem_read_u16(addr);
                 let addr = base.wrapping_add(self.register_y as u16);
 
                 (addr, page_cross(base, addr))
-            },
+            }
             AddressingMode::Indirect_X => {
                 let base = self.mem_read(addr);
                 let ptr: u8 = (base as u8).wrapping_add(self.register_x);
@@ -154,18 +166,19 @@ impl<'a> CPU<'a> {
                 let hi = self.mem_read(ptr.wrapping_add(1) as u16);
 
                 ((hi as u16) << 8 | (lo as u16), false)
-            },
+            }
             AddressingMode::Indirect_Y => {
                 let base = self.mem_read(addr);
                 let lo = self.mem_read(base as u16);
                 let hi = self.mem_read((base as u8).wrapping_add(1) as u16);
                 let deref_base = (hi as u16) << 8 | (lo as u16);
                 let deref = deref_base.wrapping_add(self.register_y as u16);
-                
+
                 (deref, page_cross(deref, deref_base))
-            },
+            }
+
             _ => {
-                panic!("Mode {:?} is Not Supported!", mode);
+                panic!("Mode {:?} is Not Supported", mode);
             }
         }
     }
@@ -183,6 +196,9 @@ impl<'a> CPU<'a> {
 
         self.register_y = data;
         self.update_zero_and_negative_flags(self.register_y);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn ldx(&mut self, mode: &AddressingMode) {
@@ -191,6 +207,9 @@ impl<'a> CPU<'a> {
 
         self.register_x = data;
         self.update_zero_and_negative_flags(self.register_x);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn lda(&mut self, mode: &AddressingMode) {
@@ -198,10 +217,13 @@ impl<'a> CPU<'a> {
         let value = self.mem_read(addr);
 
         self.set_register_a(value);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn sta(&mut self, mode: &AddressingMode) {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
 
         self.mem_write(addr, self.register_a);
     }
@@ -216,6 +238,9 @@ impl<'a> CPU<'a> {
         let data = self.mem_read(addr);
 
         self.set_register_a(data & self.register_a);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn eor(&mut self, mode: &AddressingMode) {
@@ -223,6 +248,9 @@ impl<'a> CPU<'a> {
         let data = self.mem_read(addr);
 
         self.set_register_a(data ^ self.register_a);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn ora(&mut self, mode: &AddressingMode) {
@@ -230,6 +258,9 @@ impl<'a> CPU<'a> {
         let data = self.mem_read(addr);
 
         self.set_register_a(data | self.register_a);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn tax(&mut self) {
@@ -272,14 +303,14 @@ impl<'a> CPU<'a> {
     pub fn load_and_run(&mut self, program: Vec<u8>) {
         self.load(program);
         self.reset();
+        self.program_counter = 0x0600;
         self.run()
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
         for i in 0..(program.len() as u16) {
-            self.mem_write(0x8600 + i, program[i as usize]);
+            self.mem_write(0x0600 + i, program[i as usize]);
         }
-        self.mem_write_u16(0xFFFC, 0x8600);
     }
 
     pub fn reset(&mut self) {
@@ -288,8 +319,6 @@ impl<'a> CPU<'a> {
         self.register_y = 0;
         self.stack_pointer = STACK_RESET;
         self.status = CpuFlags::from_bits_truncate(0b100100);
-        // self.memory = [0; 0xFFFF];
-
         self.program_counter = self.mem_read_u16(0xFFFC);
     }
 
@@ -316,7 +345,6 @@ impl<'a> CPU<'a> {
         } else {
             self.status.remove(CpuFlags::CARRY);
         }
-
         let result = sum as u8;
 
         if (data ^ result) & (result ^ self.register_a) & 0x80 != 0 {
@@ -324,6 +352,7 @@ impl<'a> CPU<'a> {
         } else {
             self.status.remove(CpuFlags::OVERFLOW)
         }
+
         self.set_register_a(result);
     }
 
@@ -348,6 +377,9 @@ impl<'a> CPU<'a> {
         let data = self.mem_read(addr);
 
         self.add_to_register_a(((data as i8).wrapping_neg().wrapping_sub(1)) as u8);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn adc(&mut self, mode: &AddressingMode) {
@@ -355,6 +387,9 @@ impl<'a> CPU<'a> {
         let value = self.mem_read(addr);
 
         self.add_to_register_a(value);
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn stack_pop(&mut self) -> u8 {
@@ -395,7 +430,7 @@ impl<'a> CPU<'a> {
     }
 
     fn asl(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
 
         if data >> 7 == 1 {
@@ -422,7 +457,7 @@ impl<'a> CPU<'a> {
     }
 
     fn lsr(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
 
         if data & 1 == 1 {
@@ -437,7 +472,7 @@ impl<'a> CPU<'a> {
     }
 
     fn rol(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
         let old_carry = self.status.contains(CpuFlags::CARRY);
 
@@ -472,7 +507,7 @@ impl<'a> CPU<'a> {
     }
 
     fn ror(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
         let old_carry = self.status.contains(CpuFlags::CARRY);
 
@@ -507,7 +542,7 @@ impl<'a> CPU<'a> {
     }
 
     fn inc(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
 
         data = data.wrapping_add(1);
@@ -527,7 +562,7 @@ impl<'a> CPU<'a> {
     }
 
     fn dec(&mut self, mode: &AddressingMode) -> u8 {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
 
         data = data.wrapping_sub(1);
@@ -549,6 +584,7 @@ impl<'a> CPU<'a> {
     }
 
     fn php(&mut self) {
+        //http://wiki.nesdev.com/w/index.php/CPU_status_flag_behavior
         let mut flags = self.status.clone();
 
         flags.insert(CpuFlags::BREAK);
@@ -557,7 +593,7 @@ impl<'a> CPU<'a> {
     }
 
     fn bit(&mut self, mode: &AddressingMode) {
-        let (addr, page_cross) = self.get_operand_address(mode);
+        let (addr, _) = self.get_operand_address(mode);
         let data = self.mem_read(addr);
         let and = self.register_a & data;
 
@@ -580,16 +616,24 @@ impl<'a> CPU<'a> {
             self.status.remove(CpuFlags::CARRY);
         }
         self.update_zero_and_negative_flags(compare_with.wrapping_sub(data));
+        if page_cross {
+            self.bus.tick(1);
+        }
     }
 
     fn branch(&mut self, condition: bool) {
         if condition {
+            self.bus.tick(1);
+
             let jump: i8 = self.mem_read(self.program_counter) as i8;
             let jump_addr = self
                 .program_counter
                 .wrapping_add(1)
                 .wrapping_add(jump as u16);
 
+            if self.program_counter.wrapping_add(1) & 0xFF00 != jump_addr & 0xFF00 {
+                self.bus.tick(1);
+            }
             self.program_counter = jump_addr;
         }
     }
@@ -597,9 +641,9 @@ impl<'a> CPU<'a> {
     fn interrupt(&mut self, interrupt: interrupt::Interrupt) {
         self.stack_push_u16(self.program_counter);
         let mut flag = self.status.clone();
+
         flag.set(CpuFlags::BREAK, interrupt.b_flag_mask & 0b010000 == 1);
         flag.set(CpuFlags::BREAK2, interrupt.b_flag_mask & 0b100000 == 1);
-
         self.stack_push(flag.bits);
         self.status.insert(CpuFlags::INTERRUPT_DISABLE);
         self.bus.tick(interrupt.cpu_cycles);
@@ -620,126 +664,125 @@ impl<'a> CPU<'a> {
             if let Some(_nmi) = self.bus.poll_nmi_status() {
                 self.interrupt(interrupt::NMI);
             }
-
             callback(self);
             let code = self.mem_read(self.program_counter);
+
             self.program_counter += 1;
-            
             let program_counter_state = self.program_counter;
             let opcode = opcodes
                 .get(&code)
-                .expect(&format!("OpCode {:x} is Not Recognized ...", code));
+                .expect(&format!("OpCode {:x} is not recognized", code));
 
             match code {
                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&opcode.mode);
-                },
+                }
+
                 0xAA => self.tax(),
                 0xe8 => self.inx(),
                 0x00 => return,
+                /* CLD */ 0xd8 => self.status.remove(CpuFlags::DECIMAL_MODE),
 
-                // CLD
-                0xd8 => self.status.remove(CpuFlags::DECIMAL_MODE),
-                // CLI
-                0x58 => self.status.remove(CpuFlags::INTERRUPT_DISABLE),
-                // CLV
-                0xb8 => self.status.remove(CpuFlags::OVERFLOW),
-                // CLC
-                0x18 => self.clear_carry_flag(),
-                // SEC
-                0x38 => self.set_carry_flag(),
-                // SEI
-                0x78 => self.status.insert(CpuFlags::INTERRUPT_DISABLE),
-                // SED
-                0xf8 => self.status.insert(CpuFlags::DECIMAL_MODE),
-                // PHA
-                0x48 => self.stack_push(self.register_a),
-                // PLA
+                /* CLI */ 0x58 => self.status.remove(CpuFlags::INTERRUPT_DISABLE),
+
+                /* CLV */ 0xb8 => self.status.remove(CpuFlags::OVERFLOW),
+
+                /* CLC */ 0x18 => self.clear_carry_flag(),
+
+                /* SEC */ 0x38 => self.set_carry_flag(),
+
+                /* SEI */ 0x78 => self.status.insert(CpuFlags::INTERRUPT_DISABLE),
+
+                /* SED */ 0xf8 => self.status.insert(CpuFlags::DECIMAL_MODE),
+
+                /* PHA */ 0x48 => self.stack_push(self.register_a),
+
+                /* PLA */
                 0x68 => {
                     self.pla();
-                },
-                // PHP
+                }
+                /* PHP */
                 0x08 => {
                     self.php();
-                },
-                // PLP
+                }
+                /* PLP */
                 0x28 => {
                     self.plp();
-                },
-                // ADC
+                }
+                /* ADC */
                 0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
                     self.adc(&opcode.mode);
-                },
-                // SBC
+                }
+                /* SBC */
                 0xe9 | 0xe5 | 0xf5 | 0xed | 0xfd | 0xf9 | 0xe1 | 0xf1 => {
                     self.sbc(&opcode.mode);
-                },
-                // AND
+                }
+                /* AND */
                 0x29 | 0x25 | 0x35 | 0x2d | 0x3d | 0x39 | 0x21 | 0x31 => {
                     self.and(&opcode.mode);
-                },
-                // EOR
+                }
+                /* EOR */
                 0x49 | 0x45 | 0x55 | 0x4d | 0x5d | 0x59 | 0x41 | 0x51 => {
                     self.eor(&opcode.mode);
-                },
-                // ORA
+                }
+                /* ORA */
                 0x09 | 0x05 | 0x15 | 0x0d | 0x1d | 0x19 | 0x01 | 0x11 => {
                     self.ora(&opcode.mode);
-                },
-                // LSR
-                0x4a => self.lsr_accumulator(),
+                }
+                /* LSR */ 0x4a => self.lsr_accumulator(),
+                /* LSR */
                 0x46 | 0x56 | 0x4e | 0x5e => {
                     self.lsr(&opcode.mode);
-                },
-                //ASL
-                0x0a => self.asl_accumulator(),
+                }
+                /*ASL*/ 0x0a => self.asl_accumulator(),
+                /* ASL */
                 0x06 | 0x16 | 0x0e | 0x1e => {
                     self.asl(&opcode.mode);
-                },
-                //ROL 
-                0x2a => self.rol_accumulator(),
+                }
+                /*ROL*/ 0x2a => self.rol_accumulator(),
+                /* ROL */
                 0x26 | 0x36 | 0x2e | 0x3e => {
                     self.rol(&opcode.mode);
-                },
-                // ROR
-                0x6a => self.ror_accumulator(),
+                }
+                /* ROR */ 0x6a => self.ror_accumulator(),
+                /* ROR */
                 0x66 | 0x76 | 0x6e | 0x7e => {
                     self.ror(&opcode.mode);
-                },
-                // INC
+                }
+                /* INC */
                 0xe6 | 0xf6 | 0xee | 0xfe => {
                     self.inc(&opcode.mode);
-                },
-                // INY
+                }
+                /* INY */
                 0xc8 => self.iny(),
-                // DEC
+                /* DEC */
                 0xc6 | 0xd6 | 0xce | 0xde => {
                     self.dec(&opcode.mode);
-                },
-                // DEX
+                }
+                /* DEX */
                 0xca => {
                     self.dex();
-                },
-                // DEY
+                }
+                /* DEY */
                 0x88 => {
                     self.dey();
-                },
-                // CMP
+                }
+                /* CMP */
                 0xc9 | 0xc5 | 0xd5 | 0xcd | 0xdd | 0xd9 | 0xc1 | 0xd1 => {
                     self.compare(&opcode.mode, self.register_a);
-                },
-                // CPY
+                }
+                /* CPY */
                 0xc0 | 0xc4 | 0xcc => {
                     self.compare(&opcode.mode, self.register_y);
-                },
-                // CPX
+                }
+                /* CPX */
                 0xe0 | 0xe4 | 0xec => self.compare(&opcode.mode, self.register_x),
-                // JMP Absolute
+                /* JMP Absolute */
                 0x4c => {
                     let mem_address = self.mem_read_u16(self.program_counter);
                     self.program_counter = mem_address;
-                },
-                // JMP Indirect
+                }
+                /* JMP Indirect */
                 0x6c => {
                     let mem_address = self.mem_read_u16(self.program_counter);
                     let indirect_ref = if mem_address & 0x00FF == 0x00FF {
@@ -749,150 +792,151 @@ impl<'a> CPU<'a> {
                     } else {
                         self.mem_read_u16(mem_address)
                     };
-
                     self.program_counter = indirect_ref;
-                },
-                // JSR
+                }
+                /* JSR */
                 0x20 => {
                     self.stack_push_u16(self.program_counter + 2 - 1);
                     let target_address = self.mem_read_u16(self.program_counter);
                     self.program_counter = target_address
-                },
-                // RTS
+                }
+                /* RTS */
                 0x60 => {
                     self.program_counter = self.stack_pop_u16() + 1;
-                },
-                // RTI
+                }
+                /* RTI */
                 0x40 => {
                     self.status.bits = self.stack_pop();
                     self.status.remove(CpuFlags::BREAK);
                     self.status.insert(CpuFlags::BREAK2);
+
                     self.program_counter = self.stack_pop_u16();
-                },
-                // BNE
+                }
+                /* BNE */
                 0xd0 => {
                     self.branch(!self.status.contains(CpuFlags::ZERO));
-                },
-                // BVS
+                }
+                /* BVS */
                 0x70 => {
                     self.branch(self.status.contains(CpuFlags::OVERFLOW));
-                },
-                // BVC
+                }
+                /* BVC */
                 0x50 => {
                     self.branch(!self.status.contains(CpuFlags::OVERFLOW));
-                },
-                // BPL
+                }
+                /* BPL */
                 0x10 => {
                     self.branch(!self.status.contains(CpuFlags::NEGATIV));
-                },
-                // BMI
+                }
+                /* BMI */
                 0x30 => {
                     self.branch(self.status.contains(CpuFlags::NEGATIV));
-                },
-                // BEQ
+                }
+                /* BEQ */
                 0xf0 => {
                     self.branch(self.status.contains(CpuFlags::ZERO));
-                },
-                // BCS
+                }
+                /* BCS */
                 0xb0 => {
                     self.branch(self.status.contains(CpuFlags::CARRY));
-                },
-                // BCC
+                }
+                /* BCC */
                 0x90 => {
                     self.branch(!self.status.contains(CpuFlags::CARRY));
-                },
-                // BIT
+                }
+                /* BIT */
                 0x24 | 0x2c => {
                     self.bit(&opcode.mode);
-                },
-                // STA
+                }
+                /* STA */
                 0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
                     self.sta(&opcode.mode);
-                },
-                // STX
+                }
+                /* STX */
                 0x86 | 0x96 | 0x8e => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
+                    
                     self.mem_write(addr, self.register_x);
-                },
-                // STY
+                }
+                /* STY */
                 0x84 | 0x94 | 0x8c => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
+                    
                     self.mem_write(addr, self.register_y);
-                },
-                // LDX
+                }
+                /* LDX */
                 0xa2 | 0xa6 | 0xb6 | 0xae | 0xbe => {
                     self.ldx(&opcode.mode);
-                },
-                // LDY
+                }
+                /* LDY */
                 0xa0 | 0xa4 | 0xb4 | 0xac | 0xbc => {
                     self.ldy(&opcode.mode);
-                },
-                // NOP
+                }
+                /* NOP */
                 0xea => {
-                    // Do Nothing
-                },
-                // TAY
+                    //do nothing
+                }
+                /* TAY */
                 0xa8 => {
                     self.register_y = self.register_a;
                     self.update_zero_and_negative_flags(self.register_y);
-                },
-                // TSX
+                }
+                /* TSX */
                 0xba => {
                     self.register_x = self.stack_pointer;
                     self.update_zero_and_negative_flags(self.register_x);
-                },
-                // TXA
+                }
+                /* TXA */
                 0x8a => {
                     self.register_a = self.register_x;
                     self.update_zero_and_negative_flags(self.register_a);
-                },
-                // TXS
+                }
+                /* TXS */
                 0x9a => {
                     self.stack_pointer = self.register_x;
-                },
-                // TYA
+                }
+                /* TYA */
                 0x98 => {
                     self.register_a = self.register_y;
                     self.update_zero_and_negative_flags(self.register_a);
-                },
+                }
 
-                // UNOFFICIAL
+                // Unofficial
 
-                // DCP
+                /* DCP */
                 0xc7 | 0xd7 | 0xCF | 0xdF | 0xdb | 0xd3 | 0xc3 => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let mut data = self.mem_read(addr);
+
                     data = data.wrapping_sub(1);
                     self.mem_write(addr, data);
-                    // self._update_zero_and_negative_flags(data);
                     if data <= self.register_a {
                         self.status.insert(CpuFlags::CARRY);
                     }
                     self.update_zero_and_negative_flags(self.register_a.wrapping_sub(data));
-                },
-                // RLA
+                }
+                /* RLA */
                 0x27 | 0x37 | 0x2F | 0x3F | 0x3b | 0x33 | 0x23 => {
                     let data = self.rol(&opcode.mode);
                     self.and_with_register_a(data);
-                },
-                // SLO
+                }
+                /* SLO */ //todo tests
                 0x07 | 0x17 | 0x0F | 0x1f | 0x1b | 0x03 | 0x13 => {
                     let data = self.asl(&opcode.mode);
                     self.or_with_register_a(data);
-                },
-                // SRE
+                }
+                /* SRE */ //todo tests
                 0x47 | 0x57 | 0x4F | 0x5f | 0x5b | 0x43 | 0x53 => {
                     let data = self.lsr(&opcode.mode);
                     self.xor_with_register_a(data);
-                },
-                // SKB
+                }
+                /* SKB */
                 0x80 | 0x82 | 0x89 | 0xc2 | 0xe2 => {
-                    // 2 byte NOP (immidiate ) */
-                    // todo: might be worth doing the read
-                },
-                // AXS
+                    // TODO
+                }
+                /* AXS */
                 0xCB => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
                     let x_and_a = self.register_x & self.register_a;
                     let result = x_and_a.wrapping_sub(data);
@@ -902,15 +946,16 @@ impl<'a> CPU<'a> {
                     }
                     self.update_zero_and_negative_flags(result);
                     self.register_x = result;
-                },
-                // ARR
+                }
+                /* ARR */
                 0x6B => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
+
                     self.and_with_register_a(data);
                     self.ror_accumulator();
-
-                    //todo: registers
+                    
+                    //TODO: Registers
                     let result = self.register_a;
                     let bit_5 = (result >> 5) & 1;
                     let bit_6 = (result >> 6) & 1;
@@ -927,139 +972,144 @@ impl<'a> CPU<'a> {
                         self.status.remove(CpuFlags::OVERFLOW);
                     }
                     self.update_zero_and_negative_flags(result);
-                },
-                // Unofficial SBC
+                }
+                /* Unofficial SBC */
                 0xeb => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
+
                     self.sub_from_register_a(data);
-                },
-                // ANC
+                }
+                /* ANC */
                 0x0b | 0x2b => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
+
                     self.and_with_register_a(data);
                     if self.status.contains(CpuFlags::NEGATIV) {
                         self.status.insert(CpuFlags::CARRY);
                     } else {
                         self.status.remove(CpuFlags::CARRY);
                     }
-                },
-                // ALR
+                }
+                /* ALR */
                 0x4b => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
+
                     self.and_with_register_a(data);
                     self.lsr_accumulator();
-                },
-                //todo: test for everything bellow
-
-                // NOP Read
+                }
+                /* NOP read */
                 0x04 | 0x44 | 0x64 | 0x14 | 0x34 | 0x54 | 0x74 | 0xd4 | 0xf4 | 0x0c | 0x1c
                 | 0x3c | 0x5c | 0x7c | 0xdc | 0xfc => {
                     let (addr, page_cross) = self.get_operand_address(&opcode.mode);
                     let _data = self.mem_read(addr);
-                    
+
                     if page_cross {
                         self.bus.tick(1);
                     }
-                    // Do Nothing
-                },
-                // RRA
+                    /* Do Nothing */
+                }
+                /* RRA */
                 0x67 | 0x77 | 0x6f | 0x7f | 0x7b | 0x63 | 0x73 => {
                     let data = self.ror(&opcode.mode);
+
                     self.add_to_register_a(data);
-                },
-                // ISB
+                }
+                /* ISB */
                 0xe7 | 0xf7 | 0xef | 0xff | 0xfb | 0xe3 | 0xf3 => {
                     let data = self.inc(&opcode.mode);
+
                     self.sub_from_register_a(data);
-                },
-                // NOPs
+                }
+                /* NOPs */
                 0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x92 | 0xb2 | 0xd2
-                | 0xf2 => { /* Do Nothing */ },
-                0x1a | 0x3a | 0x5a | 0x7a | 0xda | 0xfa => { /* Do Nothing */ },
-                // LAX
+                | 0xf2 => { /* Do Nothing */ }
+                0x1a | 0x3a | 0x5a | 0x7a | 0xda | 0xfa => { /* Do Nothing */ }
+                /* LAX */
                 0xa7 | 0xb7 | 0xaf | 0xbf | 0xa3 | 0xb3 => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
+
                     self.set_register_a(data);
                     self.register_x = self.register_a;
-                },
-                // SAX
+                }
+                /* SAX */
                 0x87 | 0x97 | 0x8f | 0x83 => {
                     let data = self.register_a & self.register_x;
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
+
                     self.mem_write(addr, data);
-                },
-                // LXA
+                }
+                /* LXA */
                 0xab => {
                     self.lda(&opcode.mode);
                     self.tax();
-                },
-                // XAA
+                }
+                /* XAA */
                 0x8b => {
                     self.register_a = self.register_x;
                     self.update_zero_and_negative_flags(self.register_a);
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let data = self.mem_read(addr);
+
                     self.and_with_register_a(data);
-                },
-                // LAS
+                }
+                /* LAS */
                 0xbb => {
-                    let (addr, page_cross) = self.get_operand_address(&opcode.mode);
+                    let (addr, _) = self.get_operand_address(&opcode.mode);
                     let mut data = self.mem_read(addr);
+
                     data = data & self.stack_pointer;
                     self.register_a = data;
                     self.register_x = data;
                     self.stack_pointer = data;
                     self.update_zero_and_negative_flags(data);
-                },
-                // TAS
+                }
+                /* TAS */
                 0x9b => {
                     let data = self.register_a & self.register_x;
                     self.stack_pointer = data;
-                    let mem_address =
-                        self.mem_read_u16(self.program_counter) + self.register_y as u16;
-
+                    let mem_address = self.mem_read_u16(self.program_counter) + self.register_y as u16;
                     let data = ((mem_address >> 8) as u8 + 1) & self.stack_pointer;
+
                     self.mem_write(mem_address, data)
-                },
-                // AHX  Indirect Y
+                }
+                /* AHX  Indirect Y */
                 0x93 => {
                     let pos: u8 = self.mem_read(self.program_counter);
                     let mem_address = self.mem_read_u16(pos as u16) + self.register_y as u16;
                     let data = self.register_a & self.register_x & (mem_address >> 8) as u8;
+                    
                     self.mem_write(mem_address, data)
-                },
-                // AHX Absolute Y
+                }
+                /* AHX Absolute Y*/
                 0x9f => {
-                    let mem_address =
-                        self.mem_read_u16(self.program_counter) + self.register_y as u16;
-
+                    let mem_address = self.mem_read_u16(self.program_counter) + self.register_y as u16;
                     let data = self.register_a & self.register_x & (mem_address >> 8) as u8;
+
                     self.mem_write(mem_address, data)
-                },
-                // SHX
+                }
+                /* SHX */
                 0x9e => {
-                    let mem_address =
-                        self.mem_read_u16(self.program_counter) + self.register_y as u16;
+                    let mem_address = self.mem_read_u16(self.program_counter) + self.register_y as u16;
                     // todo if cross page boundry {
                     //     mem_address &= (self.x as u16) << 8;
                     // }
                     let data = self.register_x & ((mem_address >> 8) as u8 + 1);
+
                     self.mem_write(mem_address, data)
-                },
-                // SHY
+                }
+                /* SHY */
                 0x9c => {
-                    let mem_address =
-                        self.mem_read_u16(self.program_counter) + self.register_x as u16;
+                    let mem_address = self.mem_read_u16(self.program_counter) + self.register_x as u16;
                     let data = self.register_y & ((mem_address >> 8) as u8 + 1);
+
                     self.mem_write(mem_address, data)
                 }
             }
             self.bus.tick(opcode.cycles);
-
             if program_counter_state == self.program_counter {
                 self.program_counter += (opcode.len - 1) as u16;
             }
@@ -1071,11 +1121,13 @@ impl<'a> CPU<'a> {
 mod test {
     use super::*;
     use crate::cartridge::test;
+    use crate::ppu::NesPPU;
 
     #[test]
     fn test_0xa9_lda_immidiate_load_data() {
-        let bus = Bus::new(test::test_rom());
+        let bus = Bus::new(test::test_rom(), |ppu: &NesPPU| {});
         let mut cpu = CPU::new(bus);
+
         cpu.load_and_run(vec![0xa9, 0x05, 0x00]);
         assert_eq!(cpu.register_a, 5);
         assert!(cpu.status.bits() & 0b0000_0010 == 0b00);
@@ -1084,41 +1136,40 @@ mod test {
 
     #[test]
     fn test_0xaa_tax_move_a_to_x() {
-        let bus = Bus::new(test::test_rom());
+        let bus = Bus::new(test::test_rom(), |ppu: &NesPPU| {});
         let mut cpu = CPU::new(bus);
+
         cpu.register_a = 10;
         cpu.load_and_run(vec![0xaa, 0x00]);
-
         assert_eq!(cpu.register_x, 10)
     }
 
     #[test]
     fn test_5_ops_working_together() {
-        let bus = Bus::new(test::test_rom());
+        let bus = Bus::new(test::test_rom(), |ppu: &NesPPU| {});
         let mut cpu = CPU::new(bus);
-        cpu.load_and_run(vec![0xa9, 0xc0, 0xaa, 0xe8, 0x00]);
 
+        cpu.load_and_run(vec![0xa9, 0xc0, 0xaa, 0xe8, 0x00]);
         assert_eq!(cpu.register_x, 0xc1)
     }
 
     #[test]
     fn test_inx_overflow() {
-        let bus = Bus::new(test::test_rom());
+        let bus = Bus::new(test::test_rom(), |ppu: &NesPPU| {});
         let mut cpu = CPU::new(bus);
+
         cpu.register_x = 0xff;
         cpu.load_and_run(vec![0xe8, 0xe8, 0x00]);
-
         assert_eq!(cpu.register_x, 1)
     }
 
     #[test]
     fn test_lda_from_memory() {
-        let bus = Bus::new(test::test_rom());
+        let bus = Bus::new(test::test_rom(), |ppu: &NesPPU| {});
         let mut cpu = CPU::new(bus);
+
         cpu.mem_write(0x10, 0x55);
-
         cpu.load_and_run(vec![0xa5, 0x10, 0x00]);
-
         assert_eq!(cpu.register_a, 0x55);
     }
 }

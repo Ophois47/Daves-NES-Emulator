@@ -42,18 +42,17 @@ fn show_tile(chr_rom: &Vec<u8>, bank: usize, tile_n: usize) ->Frame {
             upper = upper >> 1;
             lower = lower >> 1;
             let rgb = match value {
-                0 => palette::SYSTEM_PALETTE[0x01],
-                1 => palette::SYSTEM_PALETTE[0x23],
-                2 => palette::SYSTEM_PALETTE[0x27],
-                3 => palette::SYSTEM_PALETTE[0x30],
-                _ => panic!("What in the wide wide world of sports is a' goin' on?!"),
+                0 => palette::SYSTEM_PALLETE[0x01],
+                1 => palette::SYSTEM_PALLETE[0x23],
+                2 => palette::SYSTEM_PALLETE[0x27],
+                3 => palette::SYSTEM_PALLETE[0x30],
+                _ => panic!("can't be"),
             };
             frame.set_pixel(x, y, rgb)
         }
     }
     frame
 }
-
 
 fn show_tile_bank(chr_rom: &Vec<u8>, bank: usize) ->Frame {
     assert!(bank <= 1);
@@ -79,27 +78,26 @@ fn show_tile_bank(chr_rom: &Vec<u8>, bank: usize) ->Frame {
                 upper = upper >> 1;
                 lower = lower >> 1;
                 let rgb = match value {
-                    0 => palette::SYSTEM_PALETTE[0x01],
-                    1 => palette::SYSTEM_PALETTE[0x23],
-                    2 => palette::SYSTEM_PALETTE[0x27],
-                    3 => palette::SYSTEM_PALETTE[0x30],
-                    _ => panic!("What in the wide wide world of sports is a' goin' on?!"),
+                    0 => palette::SYSTEM_PALLETE[0x01],
+                    1 => palette::SYSTEM_PALLETE[0x23],
+                    2 => palette::SYSTEM_PALLETE[0x27],
+                    3 => palette::SYSTEM_PALLETE[0x30],
+                    _ => panic!("can't be"),
                 };
                 frame.set_pixel(tile_x + x, tile_y + y, rgb)
             }
         }
-
         tile_x += 10;
     }
     frame
 }
 
-
 fn main() {
+    // Initialize sdl2
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
-        .window("Dave's Tile Viewer", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
+        .window("Tile viewer", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
         .position_centered()
         .build()
         .unwrap();
@@ -113,15 +111,14 @@ fn main() {
         .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
         .unwrap();
 
-    //Load the Game
-    let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
+    // Load the Game
+    let bytes: Vec<u8> = std::fs::read("marioe.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
     let right_bank = show_tile_bank(&rom.chr_rom, 1);
 
     texture.update(None, &right_bank.data, 256 * 3).unwrap();
     canvas.copy(&texture, None, None).unwrap();
     canvas.present();
-
     loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -132,6 +129,6 @@ fn main() {
               } => std::process::exit(0),
               _ => { /* Do Nothing */ }
             }
-         }
+        }
     }
 }

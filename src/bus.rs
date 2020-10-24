@@ -2,10 +2,10 @@ use crate::cartridge::Rom;
 use crate::cpu::Mem;
 use crate::ppu::NesPPU;
 use crate::ppu::PPU;
+use crate::joypad::Joypad;
 
 const RAM: u16 = 0x0000;
 const RAM_MIRRORS_END: u16 = 0x1FFF;
-const PPU_REGISTERS: u16 = 0x2000;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 
 pub struct Bus<'call> {
@@ -13,15 +13,16 @@ pub struct Bus<'call> {
     prg_rom: Vec<u8>,
     ppu: NesPPU,
     cycles: usize,
-    gameloop_callback: Box<dyn FnMut(&NesPPU) + 'call>,
+    gameloop_callback: Box<dyn FnMut(&NesPPU, &mut Joypad) + 'call>,
+    joypad1: Joypad,
 }
 
 impl<'a> Bus<'a> {
     pub fn new<'call, F>(rom: Rom, gameloop_callback: F) -> Bus<'call>
     where
-        F: FnMut(&NesPPU) + 'call, 
+        F: FnMut(&NesPPU, &mut Joypad) + 'call,
     {
-    	let ppu = NesPPU::new(rom.chr_rom, rom.screen_mirroring);
+        let ppu = NesPPU::new(rom.chr_rom, rom.screen_mirroring);
 
         Bus {
             cpu_vram: [0; 2048],
@@ -29,6 +30,7 @@ impl<'a> Bus<'a> {
             ppu: ppu,
             cycles: 0,
             gameloop_callback: Box::from(gameloop_callback),
+            joypad1: Joypad::new()
         }
     }
 
@@ -41,15 +43,19 @@ impl<'a> Bus<'a> {
     }
 
     pub fn tick(&mut self, cycles: u8) {
-    	self.cycles += cycles as usize;
-    	let new_frame = self.ppu.tick(cycles * 3);
-        if new_frame {
-            (self.gameloop_callback)(&self.ppu);
+        self.cycles += cycles as usize;
+
+        let nmi_before = self.ppu.nmi_interrupt.is_some();
+        self.ppu.tick(cycles *3);
+        let nmi_after = self.ppu.nmi_interrupt.is_some();
+        
+        if !nmi_before && nmi_after {
+            (self.gameloop_callback)(&self.ppu, &mut self.joypad1);
         }
     }
-
+    
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
-    	self.ppu.nmi_interrupt.take()
+        self.ppu.poll_nmi_interrupt()
     }
 }
 
@@ -59,20 +65,28 @@ impl Mem for Bus<'_> {
             RAM..=RAM_MIRRORS_END => {
                 let mirror_down_addr = addr & 0b00000111_11111111;
                 self.cpu_vram[mirror_down_addr as usize]
-            }
+            },
             0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
-                panic!("Attempt to Read From Write-Only PPU Address {:x}", addr);
-                // 0
-            }
+                0
+            },
             0x2002 => self.ppu.read_status(),
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(),
-
-            
+            0x4000..=0x4015 => {
+                // Ignore APU
+                0
+            },
+            0x4016 => {
+                self.joypad1.read()
+            },
+            0x4017 => {
+                // Ignore Joypad 2
+                0
+            },
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0b00100000_00000111;
                 self.mem_read(mirror_down_addr)
-            }
+            },
             0x8000..=0xFFFF => self.read_prg_rom(addr),
 
             _ => {
@@ -94,7 +108,7 @@ impl Mem for Bus<'_> {
             0x2001 => {
                 self.ppu.write_to_mask(data);
             },
-            0x2002 => panic!("attempt to write to PPU status register"),
+            0x2002 => panic!("Attempt to Write to PPU Status Register"),
             0x2003 => {
                 self.ppu.write_to_oam_addr(data);
             },
@@ -110,16 +124,48 @@ impl Mem for Bus<'_> {
             0x2007 => {
                 self.ppu.write_to_data(data);
             },
+            0x4000..=0x4013 | 0x4015 => {
+                // Ignore APU
+            },
+            0x4016 => {
+                self.joypad1.write(data);
+            },
+            0x4017 => {
+                // Ignore Joypad 2
+            },
+            0x4014 => {
+                let mut buffer: [u8; 256] = [0; 256];
+                let hi: u16 = (data as u16) << 8;
+
+                for i in 0..256u16 {
+                    buffer[i as usize] = self.mem_read(hi + i);
+                }
+                self.ppu.write_oam_dma(&buffer);
+            },
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0b00100000_00000111;
+
                 self.mem_write(mirror_down_addr, data);
-                // todo!("PPU is not supported yet");
+                // todo!("PPU Not Supported yet");
             },
             0x8000..=0xFFFF => panic!("Attempt to write to Cartridge ROM space: {:x}", addr),
-
             _ => {
-                println!("Ignoring mem write-access at {}", addr);
+                println!("Ignoring Memory Write-Access at {}", addr);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::cartridge::test;
+
+    #[test]
+    fn test_mem_read_write_to_ram() {
+        let mut bus = Bus::new(test::test_rom(), |ppu: &NesPPU, &mut Joypad| {});
+
+        bus.mem_write(0x01, 0x55);
+        assert_eq!(bus.mem_read(0x01), 0x55);
     }
 }

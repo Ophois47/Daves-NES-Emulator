@@ -2,6 +2,7 @@ const NES_TAG: [u8; 4] = [0x4E, 0x45, 0x53, 0x1A];
 const PRG_ROM_PAGE_SIZE: usize = 16384;
 const CHR_ROM_PAGE_SIZE: usize = 8192;
 
+#[allow(non_camel_case_types)]
 #[derive(Debug, PartialEq)]
 pub enum Mirroring {
     VERTICAL,
@@ -21,14 +22,12 @@ impl Rom {
         if &raw[0..4] != NES_TAG {
             return Err("File Not in iNES File Format".to_string());
         }
-
         let mapper = (raw[7] & 0b1111_0000) | (raw[6] >> 4);
-
         let ines_ver = (raw[7] >> 2) & 0b11;
+
         if ines_ver != 0 {
             return Err("NES2.0 Format Not Supported".to_string());
         }
-
         let four_screen = raw[6] & 0b1000 != 0;
         let vertical_mirroring = raw[6] & 0b1 != 0;
         let screen_mirroring = match (four_screen, vertical_mirroring) {
@@ -36,12 +35,9 @@ impl Rom {
             (false, true) => Mirroring::VERTICAL,
             (false, false) => Mirroring::HORIZONTAL,
         };
-
         let prg_rom_size = raw[4] as usize * PRG_ROM_PAGE_SIZE;
         let chr_rom_size = raw[5] as usize * CHR_ROM_PAGE_SIZE;
-
         let skip_trainer = raw[6] & 0b100 != 0;
-
         let prg_rom_start = 16 + if skip_trainer { 512 } else { 0 };
         let chr_rom_start = prg_rom_start + prg_rom_size;
 
@@ -71,14 +67,12 @@ pub mod test {
                 + rom.pgp_rom.len()
                 + rom.chr_rom.len(),
         );
-
         result.extend(&rom.header);
         if let Some(t) = rom.trainer {
             result.extend(t);
         }
         result.extend(&rom.pgp_rom);
         result.extend(&rom.chr_rom);
-
         result
     }
 

@@ -1,9 +1,9 @@
 use crate::cartridge::Mirroring;
+use registers::addr::AddrRegister;
 use registers::control::ControlRegister;
 use registers::mask::MaskRegister;
-use registers::status::StatusRegister;
 use registers::scroll::ScrollRegister;
-use registers::addr::AddrRegister;
+use registers::status::StatusRegister;
 
 pub mod registers;
 
@@ -16,13 +16,11 @@ pub struct NesPPU {
     pub scroll: ScrollRegister,
     pub addr: AddrRegister,
     pub vram: [u8; 2048],
-
     pub oam_addr: u8,
     pub oam_data: [u8; 256],
     pub palette_table: [u8; 32],
-  
     internal_data_buf: u8,
-    scanline: u16,
+    pub scanline: u16,
     cycles: usize,
     pub nmi_interrupt: Option<u8>,
 }
@@ -30,7 +28,7 @@ pub struct NesPPU {
 pub trait PPU {
     fn write_to_ctrl(&mut self, value: u8);
     fn write_to_mask(&mut self, value: u8);
-    fn read_status(&mut self) -> u8; 
+    fn read_status(&mut self) -> u8;
     fn write_to_oam_addr(&mut self, value: u8);
     fn write_to_oam_data(&mut self, value: u8);
     fn read_oam_data(&self) -> u8;
@@ -85,44 +83,49 @@ impl NesPPU {
     }
 
     pub fn tick(&mut self, cycles: u8) -> bool {
-    	self.cycles += cycles as usize;
-    	if self.cycles >= 341 {
-    		self.cycles = self.cycles - 341;
-    		self.scanline += 1;
+        self.cycles += cycles as usize;
+        if self.cycles >= 341 {
+            if self.is_sprite_0_hit(self.cycles) {
+                self.status.set_sprite_zero_hit(true);
+            }
+            self.cycles = self.cycles - 341;
+            self.scanline += 1;
 
-    		if self.scanline == 241 {
-    			self.status.set_vblank_status(true);
-    			self.status.set_sprite_zero_hit(false);
-    			if self.ctrl.generate_vblank_nmi() {
-    				self.nmi_interrupt = Some(1);
-    			}
-    		}
-
-    		if self.scanline >= 262 {
-    			self.scanline = 0;
-    			self.nmi_interrupt = None;
-    			// self.status
-    			self.status.set_sprite_zero_hit(false);
-    			self.status.reset_vblank_status();
-
-    			return true;
-    		}
-    	}
-    	return false;
+            if self.scanline == 241 {
+                self.status.set_vblank_status(true);
+                self.status.set_sprite_zero_hit(false);
+                if self.ctrl.generate_vblank_nmi() {
+                    self.nmi_interrupt = Some(1);
+                }
+            }
+            if self.scanline >= 262 {
+                self.scanline = 0;
+                self.nmi_interrupt = None;
+                self.status.set_sprite_zero_hit(false);
+                self.status.reset_vblank_status();
+                return true;
+            }
+        }
+        return false;
     }
 
-    fn poll_nmi_interrupt(&mut self) -> Option<u8> {
-    	self.nmi_interrupt.take()
+    pub fn poll_nmi_interrupt(&mut self) -> Option<u8> {
+        self.nmi_interrupt.take()
+    }
+
+    fn is_sprite_0_hit(&self, cycle: usize) -> bool {
+        let y = self.oam_data[0] as usize;
+        let x = self.oam_data[3] as usize;
+        (y == self.scanline as usize) && x <= cycle && self.mask.show_sprites()
     }
 }
 
 impl PPU for NesPPU {
     fn write_to_ctrl(&mut self, value: u8) {
         let before_nmi_status = self.ctrl.generate_vblank_nmi();
-
         self.ctrl.update(value);
         if !before_nmi_status && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
-        	self.nmi_interrupt = Some(1);
+            self.nmi_interrupt = Some(1);
         }
     }
 
@@ -162,22 +165,19 @@ impl PPU for NesPPU {
     fn write_to_data(&mut self, value: u8) {
         let addr = self.addr.get();
         match addr {
-            0..=0x1fff => println!("attempt to write to chr rom space {}", addr), 
+            0..=0x1fff => println!("Attempt to Write to 'chr rom' Space {}", addr),
             0x2000..=0x2fff => {
                 self.vram[self.mirror_vram_addr(addr) as usize] = value;
-            }
-            0x3000..=0x3eff => unimplemented!("addr {} shouldn't be used in reallity", addr),
-
-            //Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
+            },
+            0x3000..=0x3eff => unimplemented!("Address {} Shouldn't be Used in Reallity", addr),
             0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3f00) as usize] = value;
-            }
-            0x3f00..=0x3fff =>
-            {
+            },
+            0x3f00..=0x3fff => {
                 self.palette_table[(addr - 0x3f00) as usize] = value;
-            }
-            _ => panic!("unexpected access to mirrored space {}", addr),
+            },
+            _ => panic!("Unexpected Access to Mirrored Space {}", addr),
         }
         self.increment_vram_addr();
     }
@@ -186,31 +186,24 @@ impl PPU for NesPPU {
         let addr = self.addr.get();
 
         self.increment_vram_addr();
-
         match addr {
             0..=0x1fff => {
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.chr_rom[addr as usize];
                 result
-            }
+            },
             0x2000..=0x2fff => {
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.vram[self.mirror_vram_addr(addr) as usize];
                 result
-            }
-            0x3000..=0x3eff => unimplemented!("addr {} shouldn't be used in reallity", addr),
-
-            //Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
+            },
+            0x3000..=0x3eff => unimplemented!("Address {} Shouldn't be Used in Reallity", addr),
             0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3f00) as usize]
-            }
-
-            0x3f00..=0x3fff =>
-            {
-                self.palette_table[(addr - 0x3f00) as usize]
-            }
-            _ => panic!("unexpected access to mirrored space {}", addr),
+            },
+            0x3f00..=0x3fff => self.palette_table[(addr - 0x3f00) as usize],
+            _ => panic!("Unexpected Access to Mirrored Space {}", addr),
         }
     }
 
@@ -233,6 +226,7 @@ pub mod test {
         ppu.write_to_ppu_addr(0x23);
         ppu.write_to_ppu_addr(0x05);
         ppu.write_to_data(0x66);
+
         assert_eq!(ppu.vram[0x0305], 0x66);
     }
 
@@ -244,9 +238,8 @@ pub mod test {
         ppu.vram[0x0305] = 0x66;
         ppu.write_to_ppu_addr(0x23);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer
         ppu.read_data();
+
         assert_eq!(ppu.addr.get(), 0x2306);
         assert_eq!(ppu.read_data(), 0x66);
     }
@@ -260,9 +253,8 @@ pub mod test {
         ppu.vram[0x0200] = 0x77;
         ppu.write_to_ppu_addr(0x21);
         ppu.write_to_ppu_addr(0xff);
-
-        // Load Into Buffer
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x66);
         assert_eq!(ppu.read_data(), 0x77);
     }
@@ -277,9 +269,8 @@ pub mod test {
         ppu.vram[0x01ff + 64] = 0x88;
         ppu.write_to_ppu_addr(0x21);
         ppu.write_to_ppu_addr(0xff);
-
-        // Load Into Buffer
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x66);
         assert_eq!(ppu.read_data(), 0x77);
         assert_eq!(ppu.read_data(), 0x88);
@@ -291,25 +282,19 @@ pub mod test {
 
         ppu.write_to_ppu_addr(0x24);
         ppu.write_to_ppu_addr(0x05);
-
-        // Write To A
         ppu.write_to_data(0x66);
         ppu.write_to_ppu_addr(0x28);
         ppu.write_to_ppu_addr(0x05);
-
-        // Write To B
         ppu.write_to_data(0x77);
         ppu.write_to_ppu_addr(0x20);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer, Read From A
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x66);
         ppu.write_to_ppu_addr(0x2C);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer, Read From B
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x77);
     }
 
@@ -319,25 +304,19 @@ pub mod test {
 
         ppu.write_to_ppu_addr(0x20);
         ppu.write_to_ppu_addr(0x05);
-
-        // Write To A
         ppu.write_to_data(0x66);
         ppu.write_to_ppu_addr(0x2C);
         ppu.write_to_ppu_addr(0x05);
-
-		// Write To B
         ppu.write_to_data(0x77);
         ppu.write_to_ppu_addr(0x28);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer, Read From A
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x66);
         ppu.write_to_ppu_addr(0x24);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer, Read From B
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x77);
     }
 
@@ -349,41 +328,38 @@ pub mod test {
         ppu.write_to_ppu_addr(0x21);
         ppu.write_to_ppu_addr(0x23);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer
         ppu.read_data();
+
         assert_ne!(ppu.read_data(), 0x66);
         ppu.read_status();
         ppu.write_to_ppu_addr(0x23);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x66);
     }
 
     #[test]
     fn test_ppu_vram_mirroring() {
         let mut ppu = NesPPU::new_empty_rom();
+
         ppu.write_to_ctrl(0);
         ppu.vram[0x0305] = 0x66;
-
-        // 0x6305 -> 0x2305
         ppu.write_to_ppu_addr(0x63);
         ppu.write_to_ppu_addr(0x05);
-
-        // Load Into Buffer
         ppu.read_data();
+
         assert_eq!(ppu.read_data(), 0x66);
-        // assert_eq!(ppu.addr.read(), 0x0306)
     }
 
     #[test]
     fn test_read_status_resets_vblank() {
         let mut ppu = NesPPU::new_empty_rom();
+
         ppu.status.set_vblank_status(true);
 
         let status = ppu.read_status();
+
         assert_eq!(status >> 7, 1);
         assert_eq!(ppu.status.snapshot() >> 7, 0);
     }
@@ -391,12 +367,15 @@ pub mod test {
     #[test]
     fn test_oam_read_write() {
         let mut ppu = NesPPU::new_empty_rom();
+
         ppu.write_to_oam_addr(0x10);
         ppu.write_to_oam_data(0x66);
         ppu.write_to_oam_data(0x77);
         ppu.write_to_oam_addr(0x10);
+
         assert_eq!(ppu.read_oam_data(), 0x66);
         ppu.write_to_oam_addr(0x11);
+
         assert_eq!(ppu.read_oam_data(), 0x77);
     }
 
@@ -407,10 +386,10 @@ pub mod test {
 
         data[0] = 0x77;
         data[255] = 0x88;
-
         ppu.write_to_oam_addr(0x10);
         ppu.write_oam_dma(&data);
         ppu.write_to_oam_addr(0xf);
+
         assert_eq!(ppu.read_oam_data(), 0x88);
         ppu.write_to_oam_addr(0x10);
         ppu.write_to_oam_addr(0x77);
