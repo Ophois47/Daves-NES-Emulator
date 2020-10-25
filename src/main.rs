@@ -42,7 +42,7 @@ fn main() {
         .unwrap();
 
     // Load Game
-    let bytes: Vec<u8> = std::fs::read("galaga.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
     let mut frame = Frame::new();
     let mut key_map = HashMap::new();
@@ -55,7 +55,6 @@ fn main() {
     key_map.insert(Keycode::Return, joypad::JoypadButton::START);
     key_map.insert(Keycode::A, joypad::JoypadButton::BUTTON_A);
     key_map.insert(Keycode::S, joypad::JoypadButton::BUTTON_B);
-
 
     // Run Game Cycle
     let bus = Bus::new(rom, move |ppu: &NesPPU, joypad: &mut joypad::Joypad| {
